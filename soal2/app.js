@@ -1,69 +1,48 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
-console.log('Path imageProcessor.js:', 
-  fs.existsSync(path.join(__dirname, 'utils', 'imageProcessor.js')));
-const { convertToWebP } = require('./utils/imageProcessor');
-const { validateRequest, handleErrors } = require('./utils/errorHandler');
-const authMiddleware = require('./utils/authMiddleware');
+import 'dotenv/config';
+import express from 'express';
+import { query } from './config/database.js';
+import seedOrders from './dummy/orderSeed.js';
 
+// Inisialisasi Express
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.use(express.json());
 
-// Buat folder temp jika belum ada
-if (!fs.existsSync('./temp')) {
-  fs.mkdirSync('./temp');
+// Endpoint untuk testing
+app.get('/', (req, res) => {
+    res.send('Order System API');
+});
+
+// Inisialisasi server
+async function startServer() {
+    try {
+        // Buat tabel jika belum ada
+        await query(`
+            CREATE TABLE IF NOT EXISTS orders (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                produk_id INT NOT NULL,
+                nama_produk VARCHAR(255) NOT NULL,
+                harga DECIMAL(10,2) NOT NULL,
+                kode_unik INT NOT NULL,
+                status ENUM('pending', 'completed', 'cancelled') DEFAULT 'pending',
+                tanggal DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX (kode_unik)
+            )
+        `);
+        
+        // Jalankan seeder jika diperlukan
+        if (process.env.RUN_SEEDER === 'true') {
+            console.log('Running seeder...');
+            await seedOrders();
+        }
+        
+        const PORT = process.env.PORT || 3000;
+        app.listen(PORT, () => {
+            console.log(`Server running on port ${PORT}`);
+        });
+    } catch (error) {
+        console.error('Failed to start server:', error);
+        process.exit(1);
+    }
 }
 
-app.use(bodyParser.json());
-
-// Endpoint untuk konversi gambar
-app.post('/convert-to-webp', authMiddleware, async (req, res) => {
-  try {
-    // Validasi request
-    const { isValid, message } = validateRequest(req.body);
-    if (!isValid) {
-      return res.status(400).json({
-        status: 'error',
-        message: message
-      });
-    }
-
-    const { url_gambar, persentase_kompresi } = req.body;
-    const compression = persentase_kompresi || 60;
-
-    // Proses konversi gambar
-    const result = await convertToWebP(url_gambar, compression);
-
-    res.json({
-      status: 'success',
-      message: 'Gambar berhasil dikonversi ke WEBP',
-      url_webp: result.url_webp,
-      ukuran_webp: result.ukuran_webp
-    });
-
-  } catch (error) {
-    handleErrors(error, res);
-  }
-});
-
-// Endpoint untuk testing HMAC
-app.post('/test-hmac', (req, res) => {
-  const secret = 'your-secret-key'; // Harus sama dengan yang digunakan di client
-  const hmac = crypto.createHmac('sha512', secret);
-  const data = JSON.stringify(req.body);
-  hmac.update(data);
-  const signature = hmac.digest('hex');
-
-  res.json({
-    receivedSignature: req.headers['x-auth-hmac'],
-    calculatedSignature: signature,
-    isValid: req.headers['x-auth-hmac'] === signature
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+startServer();
